@@ -49,7 +49,29 @@
 		DECL(oil_watchman) \
 		DECL(current_cost) \
 		DECL(emontx) \
-		DECL(ht680)
+		DECL(ht680) \
+		DECL(s3318p) \
+		DECL(akhan_100F14) \
+		DECL(quhwa) \
+		DECL(oregon_scientific_v1) \
+		DECL(proove) \
+		DECL(bresser_3ch) \
+		DECL(springfield) \
+		DECL(oregon_scientific_sl109h) \
+		DECL(acurite_606) \
+		DECL(tfa_pool_thermometer) \
+		DECL(kedsum) \
+		DECL(blyss) \
+		DECL(steelmate) \
+		DECL(schraeder) \
+		DECL(lightwave_rf) \
+		DECL(elro_db286a) \
+                DECL(efergy_optical) \
+                DECL(hondaremote) \
+		DECL(template) \
+		DECL(fineoffset_XC0400) \
+		DECL(radiohead_ask)
+
 
 typedef struct {
 	char name[256];
@@ -59,7 +81,7 @@ typedef struct {
 	float reset_limit;
 	int (*json_callback)(bitbuffer_t *bitbuffer);
 	unsigned int disabled;
-	unsigned long demod_arg;	// Decoder specific optional argument (may be pointer to struct)
+	uintptr_t demod_arg;	// Decoder specific optional argument (may be pointer to struct)
 	char **fields;			// List of fields this decoder produces; required for CSV output. NULL-terminated.
 } r_device;
 

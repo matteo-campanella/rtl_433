@@ -35,6 +35,8 @@ static int do_exit = 0;
 static int do_exit_async = 0, frequencies = 0, events = 0;
 uint32_t frequency[MAX_PROTOCOLS];
 time_t rawtime_old;
+int duration = 0;
+time_t stop_time;
 int flag;
 uint32_t samp_rate = DEFAULT_SAMPLE_RATE;
 float sample_file_pos = -1;
@@ -44,6 +46,7 @@ static int override_short = 0;
 static int override_long = 0;
 int debug_output = 0;
 int quiet_mode = 0;
+int utc_mode = 0;
 int overwrite_mode = 0;
 
 typedef enum  {
@@ -100,9 +103,11 @@ void usage(r_device *devices) {
             "\t[-S] Force sync output (default: async)\n"
             "\t= Demodulator options =\n"
             "\t[-R <device>] Listen only for the specified remote device (can be used multiple times)\n"
+            "\t[-G] Register all devices\n"
             "\t[-l <level>] Change detection level used to determine pulses [0-32767] (0 = auto) (default: %i)\n"
             "\t[-z <value>] Override short value in data decoder\n"
             "\t[-x <value>] Override long value in data decoder\n"
+            "\t[-n <value>]  Specify number of samples to take (each sample is 2 bytes: 1 each of I & Q)\n"
             "\t= Analyze/Debug options =\n"
             "\t[-a] Analyze mode. Print a textual description of the signal. Disables decoding\n"
             "\t[-A] Pulse Analyzer. Enable pulse analyzis and decode attempt\n"
@@ -121,7 +126,9 @@ void usage(r_device *devices) {
             "\t\t Note: If output file is specified, input will always be I/Q\n"
             "\t[-F] kv|json|csv Produce decoded output in given format. Not yet supported by all drivers.\n"
             "\t[-C] native|si|customary Convert units in decoded output.\n"
-            "\t[<filename>] Save data stream to output file (a '-' dumps samples to stdout)\n\n", 
+            "\t[-T] specify number of seconds to run\n"
+            "\t[-U] Print timestamps in UTC (this may also be accomplished by invocation with TZ environment variable set).\n"
+            "\t[<filename>] Save data stream to output file (a '-' dumps samples to stdout)\n\n",
             DEFAULT_FREQUENCY, DEFAULT_SAMPLE_RATE, DEFAULT_LEVEL_LIMIT);
 
     fprintf(stderr, "Supported devices:\n");
@@ -172,7 +179,7 @@ static void register_protocol(struct dm_state *demod, r_device *t_dev) {
     demod->r_dev_num++;
 
     if (!quiet_mode) {
-	fprintf(stderr, "Registering protocol \"%s\"\n", t_dev->name);
+	fprintf(stderr, "Registering protocol [%d] \"%s\"\n", demod->r_dev_num, t_dev->name);
     }
 
     if (demod->r_dev_num > MAX_PROTOCOLS)
@@ -193,13 +200,16 @@ static unsigned int signal_end = 0;
 static unsigned int signal_pulse_data[4000][3] = {
     {0}};
 static unsigned int signal_pulse_counter = 0;
-typedef enum  {
-    OUTPUT_KV,
-    OUTPUT_JSON,
-    OUTPUT_CSV
-} output_format_t;
-static output_format_t output_format;
-void *csv_aux_data;
+
+typedef struct output_handler {
+    /*data_printer_t*/ void *printer;
+    void (*aux_free)(void *aux);
+    FILE *file;
+    void *aux;
+    struct output_handler *next;
+} output_handler_t;
+static output_handler_t *output_handler = NULL;
+static output_handler_t **next_output_handler = &output_handler;
 
 /* handles incoming structured data by dumping it */
 void data_acquired_handler(data_t *data)
@@ -209,6 +219,8 @@ void data_acquired_handler(data_t *data)
             if ((d->type == DATA_DOUBLE) &&
                 !strcmp(d->key, "temperature_F")) {
                     *(double*)d->value = fahrenheit2celsius(*(double*)d->value);
+					free(d->key);
+                    d->key = strdup("temperature_C");
                     char *pos;
                     if (d->format &&
                         (pos = strrchr(d->format, 'F'))) {
@@ -222,6 +234,8 @@ void data_acquired_handler(data_t *data)
             if ((d->type == DATA_DOUBLE) &&
                 !strcmp(d->key, "temperature_C")) {
                     *(double*)d->value = celsius2fahrenheit(*(double*)d->value);
+					free(d->key);
+                    d->key = strdup("temperature_F");
                     char *pos;
                     if (d->format &&
                         (pos = strrchr(d->format, 'C'))) {
@@ -231,18 +245,9 @@ void data_acquired_handler(data_t *data)
         }
     }
 
-    switch (output_format) {
-    case OUTPUT_KV: {
-        data_print(data, stdout,  &data_kv_printer, NULL);
-    } break;
-    case OUTPUT_JSON: {
-        data_print(data, stdout,  &data_json_printer, NULL);
-    } break;
-    case OUTPUT_CSV: {
-        data_print(data, stdout,  &data_csv_printer, csv_aux_data);
-    } break;
+    for (output_handler_t *output = output_handler; output; output = output->next) {
+        data_print(data, output->file, output->printer, output->aux);
     }
-    fflush(stdout);
     data_free(data);
 }
 
@@ -649,9 +654,15 @@ static void rtlsdr_callback(unsigned char *iq_buf, uint32_t len, void *ctx) {
 						case OOK_PULSE_CLOCK_BITS:
 							pulse_demod_clock_bits(&demod->pulse_data, demod->r_devs[i]);
 							break;
+						case OOK_PULSE_PWM_OSV1:
+							pulse_demod_osv1(&demod->pulse_data, demod->r_devs[i]);
+							break;
 						// FSK decoders
 						case FSK_PULSE_PCM:
 						case FSK_PULSE_PWM_RAW:
+							break;
+						case FSK_PULSE_MANCHESTER_ZEROBIT:
+							pulse_demod_manchester_zerobit(&demod->pulse_data, demod->r_devs[i]);
 							break;
 						default:
 							fprintf(stderr, "Unknown modulation %d in protocol!\n", demod->r_devs[i]->modulation);
@@ -671,12 +682,16 @@ static void rtlsdr_callback(unsigned char *iq_buf, uint32_t len, void *ctx) {
 						case OOK_PULSE_PWM_TERNARY:
 						case OOK_PULSE_MANCHESTER_ZEROBIT:
 						case OOK_PULSE_CLOCK_BITS:
+						case OOK_PULSE_PWM_OSV1:
 							break;
 						case FSK_PULSE_PCM:
 							pulse_demod_pcm(&demod->fsk_pulse_data, demod->r_devs[i]);
 							break;
 						case FSK_PULSE_PWM_RAW:
 							pulse_demod_pwm(&demod->fsk_pulse_data, demod->r_devs[i]);
+							break;
+						case FSK_PULSE_MANCHESTER_ZEROBIT:
+							pulse_demod_manchester_zerobit(&demod->fsk_pulse_data, demod->r_devs[i]);
 							break;
 						default:
 							fprintf(stderr, "Unknown modulation %d in protocol!\n", demod->r_devs[i]->modulation);
@@ -704,9 +719,9 @@ static void rtlsdr_callback(unsigned char *iq_buf, uint32_t len, void *ctx) {
 	if (bytes_to_read > 0)
 		bytes_to_read -= len;
 
+        time_t rawtime;
+        time(&rawtime);
 	if (frequencies > 1) {
-		time_t rawtime;
-		time(&rawtime);
 		if (difftime(rawtime, rawtime_old) > DEFAULT_HOP_TIME || events >= DEFAULT_HOP_EVENTS) {
 			rawtime_old = rawtime;
 			events = 0;
@@ -714,6 +729,11 @@ static void rtlsdr_callback(unsigned char *iq_buf, uint32_t len, void *ctx) {
 			rtlsdr_cancel_async(dev);
 		}
 	}
+    if (duration > 0 && rawtime >= stop_time) {
+      do_exit_async = do_exit = 1;
+      fprintf(stderr, "Time expired, exiting!\n");
+      rtlsdr_cancel_async(dev);
+    }
 }
 
 // find the fields output for CSV
@@ -748,6 +768,51 @@ void *determine_csv_fields(r_device* devices, int num_devices)
     return csv_aux;
 }
 
+void add_json_output()
+{
+    output_handler_t *output = calloc(1, sizeof(output_handler_t));
+    if (!output) {
+        fprintf(stderr, "rtl_433: failed to allocate memory for output handler\n");
+        exit(1);
+    }
+    output->printer = &data_json_printer;
+    output->file = stdout;
+    *next_output_handler = output;
+    next_output_handler = &output->next;
+}
+
+void add_csv_output(void *aux_data)
+{
+    if (!aux_data) {
+        fprintf(stderr, "rtl_433: failed to allocate memory for CSV auxiliary data\n");
+        exit(1);
+    }
+    output_handler_t *output = calloc(1, sizeof(output_handler_t));
+    if (!output) {
+        fprintf(stderr, "rtl_433: failed to allocate memory for output handler\n");
+        exit(1);
+    }
+    output->printer = &data_csv_printer;
+    output->aux_free = &data_csv_free;
+    output->file = stdout;
+    output->aux = aux_data;
+    *next_output_handler = output;
+    next_output_handler = &output->next;
+}
+
+void add_kv_output()
+{
+    output_handler_t *output = calloc(1, sizeof(output_handler_t));
+    if (!output) {
+        fprintf(stderr, "rtl_433: failed to allocate memory for output handler\n");
+        exit(1);
+    }
+    output->printer = &data_kv_printer;
+    output->file = stdout;
+    *next_output_handler = output;
+    next_output_handler = &output->next;
+}
+
 int main(int argc, char **argv) {
 #ifndef _WIN32
     struct sigaction sigact;
@@ -756,7 +821,7 @@ int main(int argc, char **argv) {
     char *in_filename = NULL;
     FILE *in_file;
     int n_read;
-    int r, opt;
+    int r = 0, opt;
     int i, gain = 0;
     int sync_mode = 0;
     int ppm_error = 0;
@@ -767,6 +832,7 @@ int main(int argc, char **argv) {
     int device_count;
     char vendor[256], product[256], serial[256];
     int have_opt_R = 0;
+    int register_all = 0;
 
     setbuf(stdout, NULL);
     setbuf(stderr, NULL);
@@ -787,7 +853,7 @@ int main(int argc, char **argv) {
 
     demod->level_limit = DEFAULT_LEVEL_LIMIT;
 
-    while ((opt = getopt(argc, argv, "x:z:p:DtaAqm:r:l:d:f:g:s:b:n:SR:F:C:W")) != -1) {
+    while ((opt = getopt(argc, argv, "x:z:p:DtaAqm:r:l:d:f:g:s:b:n:SR:F:C:T:UWG")) != -1) {
         switch (opt) {
             case 'd':
                 dev_index = atoi(optarg);
@@ -798,6 +864,9 @@ int main(int argc, char **argv) {
                 break;
             case 'g':
                 gain = (int) (atof(optarg) * 10); /* tenths of a dB */
+                break;
+            case 'G':
+                register_all = 1;
                 break;
             case 'p':
                 ppm_error = atoi(optarg);
@@ -862,11 +931,11 @@ int main(int argc, char **argv) {
 		break;
 	    case 'F':
 		if (strcmp(optarg, "json") == 0) {
-		    output_format = OUTPUT_JSON;
+            add_json_output();
 		} else if (strcmp(optarg, "csv") == 0) {
-		    output_format = OUTPUT_CSV;
+            add_csv_output(determine_csv_fields(devices, num_r_devices));
 		} else if (strcmp(optarg, "kv") == 0) {
-		    output_format = OUTPUT_KV;
+            add_kv_output();
 		} else {
                     fprintf(stderr, "Invalid output format %s\n", optarg);
                     usage(devices);
@@ -884,10 +953,24 @@ int main(int argc, char **argv) {
                     usage(devices);
         }
         break;
+        case 'U':
+        #if !defined(__MINGW32__)
+          utc_mode = setenv("TZ", "UTC", 1);
+          if(utc_mode != 0) fprintf(stderr, "Unable to set TZ to UTC; error code: %d\n", utc_mode);
+        #endif
+        break;
             case 'W':
-	        overwrite_mode = 1;
-		break;
-
+            overwrite_mode = 1;
+        break;
+        case 'T':
+          time(&stop_time);
+          duration = atoi(optarg);
+          if (duration < 1) {
+            fprintf(stderr, "Duration '%s' was not positive integer; will continue indefinitely\n", optarg);
+          } else {
+            stop_time += duration;
+          }
+          break;
             default:
                 usage(devices);
                 break;
@@ -900,16 +983,12 @@ int main(int argc, char **argv) {
         out_filename = argv[optind];
     }
 
-    if (output_format == OUTPUT_CSV) {
-        csv_aux_data = determine_csv_fields(devices, num_r_devices);
-        if (!csv_aux_data) {
-            fprintf(stderr, "rtl_433: failed to allocate memory for CSV auxiliary data\n");
-            exit(1);
-        }
+    if (!output_handler) {
+        add_kv_output();
     }
 
     for (i = 0; i < num_r_devices; i++) {
-        if (!devices[i].disabled) {
+        if (!devices[i].disabled || register_all) {
             register_protocol(demod, &devices[i]);
             if(devices[i].modulation >= FSK_DEMOD_MIN_VAL) {
               demod->enable_FM_demod = 1;
@@ -1028,7 +1107,7 @@ int main(int argc, char **argv) {
 	    in_file = stdin;
 	    in_filename = "<stdin>";
 	} else {
-	    in_file = fopen(in_filename, "r");
+	    in_file = fopen(in_filename, "rb");
 	    if (!in_file) {
 		fprintf(stderr, "Opening file: %s failed!\n", in_filename);
 		goto out;
@@ -1079,9 +1158,15 @@ int main(int argc, char **argv) {
         fprintf(stderr, "WARNING: Failed to reset buffers.\n");
 
     if (sync_mode) {
+        if (!demod->out_file) {
+            fprintf(stderr, "Specify an output file for sync mode.\n");
+            exit(0);
+        }
+
 	fprintf(stderr, "Reading samples in sync mode...\n");
 	uint8_t *buffer = malloc(out_block_size * sizeof (uint8_t));
 
+      time_t timestamp;
         while (!do_exit) {
             r = rtlsdr_read_sync(dev, buffer, out_block_size, &n_read);
             if (r < 0) {
@@ -1103,6 +1188,14 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "Short read, samples lost, exiting!\n");
                 break;
             }
+
+        if (duration > 0) {
+          time(&timestamp);
+          if (timestamp >= stop_time) {
+            do_exit = 1;
+            fprintf(stderr, "Time expired, exiting!\n");
+          }
+        }
 
             if (bytes_to_read > 0)
                 bytes_to_read -= n_read;
@@ -1152,8 +1245,10 @@ int main(int argc, char **argv) {
 
     rtlsdr_close(dev);
 out:
-    if (csv_aux_data) {
-        data_csv_free(csv_aux_data);
+    for (output_handler_t *output = output_handler; output; output = output->next) {
+        if (output->aux_free) {
+            output->aux_free(output->aux);
+        }
     }
     return r >= 0 ? r : -r;
 }

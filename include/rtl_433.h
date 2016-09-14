@@ -35,7 +35,7 @@
 #define DEFAULT_LEVEL_LIMIT     8000		// Theoretical high level at I/Q saturation is 128x128 = 16384 (above is ripple)
 #define MINIMAL_BUF_LENGTH      512
 #define MAXIMAL_BUF_LENGTH      (256 * 16384)
-#define MAX_PROTOCOLS           100
+#define MAX_PROTOCOLS           65
 #define SIGNAL_GRABBER_BUFFER   (12 * DEFAULT_BUF_LENGTH)
 
 /* Supported modulation types */
@@ -45,11 +45,13 @@
 #define	OOK_PULSE_PWM_PRECISE	6			// Pulse Width Modulation with precise timing parameters
 #define	OOK_PULSE_PWM_RAW		7			// Pulse Width Modulation. Short pulses = 1, Long = 0
 #define	OOK_PULSE_PWM_TERNARY	8			// Pulse Width Modulation with three widths: Sync, 0, 1. Sync determined by argument
-#define	OOK_PULSE_CLOCK_BITS		9			// Level shift within the clock cycle.
+#define	OOK_PULSE_CLOCK_BITS	9			// Level shift within the clock cycle.
+#define	OOK_PULSE_PWM_OSV1		10			// Pulse Width Modulation. Oregon Scientific v1
 
 #define	FSK_DEMOD_MIN_VAL		16			// Dummy. FSK demodulation must start at this value
 #define	FSK_PULSE_PCM			16			// FSK, Pulse Code Modulation
 #define	FSK_PULSE_PWM_RAW		17			// FSK, Pulse Width Modulation. Short pulses = 1, Long = 0
+#define FSK_PULSE_MANCHESTER_ZEROBIT 18		// FSK, Manchester encoding
 
 extern int debug_output;
 extern float sample_file_pos;

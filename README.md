@@ -115,6 +115,23 @@ Supported devices:
 	[43] CurrentCost Current Sensor
 	[44] OpenEnergyMonitor emonTx v3
 	[45] HT680 Remote control
+        [46] S3318P Temperature & Humidity Sensor
+        [47] Akhan 100F14 remote keyless entry
+        [48] Quhwa
+	[49] Oregon Scientific v1 Temperature Sensor
+        [50] Proove
+        [51] Bresser Thermo-/Hygro-Sensor 3CH
+	[52] Springfield PreciseTemp Temperature and Soil Moisture
+        [53] Oregon Scientific SL109H Temperature & Humidity Sensor
+	[54] Acurite 606TX Temperature Sensor 
+        [55] TFA pool temperature sensor
+        [56] Kedsum Temperature & Humidity Sensor
+        [57] blyss DC5-UK-WH (433.92 MHz)
+        [58] Steelmate TPMS
+        [59] Schraeder TPMS
+        [60] LightwaveRF
+        [61] Elro DB286A Doorbell
+        [62] Efergy Optical
 ```
 
 
@@ -123,7 +140,7 @@ Examples:
 | Command | Description
 |---------|------------
 | `rtl_433` | Default receive mode, attempt to decode all known devices
-| `rtl_433 -p NN -R 1 -R 9 -R 36 -R 40 | Typical usage: Enable device decoders for desired devices. Correct rtl-sdr tuning error (ppm offset).
+| `rtl_433 -p NN -R 1 -R 9 -R 36 -R 40` | Typical usage: Enable device decoders for desired devices. Correct rtl-sdr tuning error (ppm offset).
 | `rtl_433 -a` | Will run in analyze mode and you will get a text description of the received signal.
 | `rtl_433 -A` | Enable pulse analyzer. Summarizes the timings of pulses, gaps, and periods. Can be used in either the normal decode mode, or analyze mode.
 | `rtl_433 -a -t` | Will run in analyze mode and save a test file per detected signal (gfile###.data). Format is uint8, 2 channels.

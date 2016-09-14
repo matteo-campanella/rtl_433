@@ -1,4 +1,4 @@
-/* Generic temperature sensor 1
+/* TFA pool temperature sensor
  *
  * Copyright (C) 2015 Alexandre Coffignal
  * This program is free software; you can redistribute it and/or modify
@@ -12,36 +12,41 @@
 #include "util.h"
 
 
-static int generic_temperature_sensor_callback(bitbuffer_t *bitbuffer) {
+static int pool_temperature_sensor_callback(bitbuffer_t *bitbuffer) {
 	bitrow_t *bb = bitbuffer->bb;
 	data_t *data;
 	char time_str[LOCAL_TIME_BUFLEN];
     local_time_str(0, time_str);
-	int i,device,battery;
+	int i,device,channel;
 	float fTemp;
 
 
-	for(i=1;i<10;i++){
-		if(bitbuffer->bits_per_row[i]!=24){
+	for(i=1;i<8;i++){
+		if(bitbuffer->bits_per_row[i]!=28){
 			/*10 24 bits frame*/
 			return 0;
 		}
 	}
 
-	//AAAAAAAA BBCCCCCC CCCCCCCC
-	//AAAAAAAA     : ID
-	//BBBB         : battery ?
-	//CCCCCCCCCCCC : Temp
+/*
+AAAABBBB BBBBCCCC CCCCCCCC DDEE
 
-	device=(bb[1][0]);
-	battery=(bb[1][1]&0xF0)>>4;
-	fTemp=(float)((signed short)(((bb[1][1]&0x3f)*256+bb[1][2])<<2))/160.0;
+A: ?
+B: device id (changing only after reset)
+C: templerature
+D: channel number
+E: ?
+*/
+
+        device=(((bb[1][0]&0xF)<<4)+((bb[1][1]&0xF0)>>4));
+        fTemp=((signed short)(((bb[1][1]&0xF)<<8)+bb[1][2])/10.0);
+	channel=(signed short)((bb[1][3]&0xC0)>>6);
 
 	data = data_make("time", 	"", 			DATA_STRING, 					time_str,
-                     "model",		"", 			DATA_STRING, 	"Generic temperature sensor 1",
+                     "model",		"", 			DATA_STRING, 	"TFA pool temperature sensor",
 		     "id",         	"Id",			DATA_FORMAT,	"\t %d",	DATA_INT,	device,
-                     "temperature_C",	"Temperature",		DATA_FORMAT, 	"%.02f C",	DATA_DOUBLE,	fTemp,
-                     "battery",      	"Battery?",		DATA_INT,					battery,
+		     "channel",        	"Channel number",	DATA_FORMAT,	"\t %d",	DATA_INT,	channel,
+                     "temperature_C",	"Temperature",		DATA_FORMAT, 	"%.01f C",	DATA_DOUBLE,	fTemp,
                      NULL);
     data_acquired_handler(data);
 	
@@ -53,19 +58,19 @@ static char *output_fields[] = {
 	"time",
 	"model",
 	"id",
+	"channel",
 	"temperature_C",
-	"battery",
 	NULL
 };
 
-r_device generic_temperature_sensor = {
+r_device tfa_pool_thermometer = {
 
-  .name          = "Generic temperature sensor 1",
+  .name          = "TFA pool temperature sensor",
   .modulation    = OOK_PULSE_PPM_RAW,
   .short_limit   = 3500,
-  .long_limit    = 4800,
+  .long_limit    = 7800,
   .reset_limit   = 10000,
-  .json_callback = &generic_temperature_sensor_callback,
+  .json_callback = &pool_temperature_sensor_callback,
   .disabled      = 0,
   .demod_arg     = 0,
   .fields        = output_fields,

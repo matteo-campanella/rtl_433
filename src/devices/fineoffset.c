@@ -63,8 +63,7 @@ static int fineoffset_WH2_callback(bitbuffer_t *bitbuffer) {
 
         // Nibble 5,6,7 contains 12 bits of temperature
         // The temperature is signed magnitude and scaled by 10
-        temp = bb[0][3];
-        temp |= (int16_t)(bb[0][2] & 0x0F) << 8;
+        temp = ((bb[0][2] & 0x0F) << 8) | bb[0][3];
         if(temp & 0x800) {
             temp &= 0x7FF;	// remove sign bit
             temp = -temp;	// reverse magnitude
@@ -85,8 +84,8 @@ static int fineoffset_WH2_callback(bitbuffer_t *bitbuffer) {
         if (bb[0][4] == 0xFF) {
         data = data_make("time",          "",            DATA_STRING, time_str,
                          "model",         "",            DATA_STRING, "TFA 30.3157 Temperature sensor",
-                         "id",            "",            DATA_INT, id,
-                         "temperature_C", "Temperature", DATA_FORMAT, "%.02f C", DATA_DOUBLE, temperature,
+                         "id",            "ID",          DATA_INT, id,
+                         "temperature_C", "Temperature", DATA_FORMAT, "%.01f C", DATA_DOUBLE, temperature,
                           NULL);
         data_acquired_handler(data);
         }
@@ -94,8 +93,8 @@ static int fineoffset_WH2_callback(bitbuffer_t *bitbuffer) {
         else {
         data = data_make("time",          "",            DATA_STRING, time_str,
                          "model",         "",            DATA_STRING, "Fine Offset Electronics, WH2 Temperature/Humidity sensor",
-                         "id",            "",            DATA_INT, id,
-                         "temperature_C", "Temperature", DATA_FORMAT, "%.02f C", DATA_DOUBLE, temperature,
+                         "id",            "ID",          DATA_INT, id,
+                         "temperature_C", "Temperature", DATA_FORMAT, "%.01f C", DATA_DOUBLE, temperature,
                          "humidity",      "Humidity",    DATA_FORMAT, "%u %%", DATA_INT, humidity,
                           NULL);
         data_acquired_handler(data);

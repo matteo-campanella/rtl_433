@@ -19,6 +19,7 @@
 
 #include "rtl_433.h"
 #include "util.h"
+#include "data.h"
 
 #define LACROSSE_WS_BITLEN	52
 
@@ -61,6 +62,7 @@ static int lacrossews_detect(uint8_t *pRow, uint8_t *msg_nybbles, int16_t rowlen
 			return 1;
 		else {
 			local_time_str(0, time_str);
+            if (debug_output) {
 			fprintf(stdout,
 				"%s LaCrosse Packet Validation Failed error: Checksum Comp. %d != Recv. %d, Parity %d\n",
 				time_str, checksum, msg_nybbles[12], parity);
@@ -68,6 +70,7 @@ static int lacrossews_detect(uint8_t *pRow, uint8_t *msg_nybbles, int16_t rowlen
 				fprintf(stderr, "%X", msg_nybbles[i]);
 			}
 			fprintf(stderr, "\n");
+            }
 			return 0;
 		}
 	}
@@ -84,7 +87,8 @@ static int lacrossews_callback(bitbuffer_t *bitbuffer) {
 	uint8_t ws_id, msg_type, sensor_id, msg_data, msg_unknown, msg_checksum;
 	int msg_value_bcd, msg_value_bcd2, msg_value_bin;
 	float temp_c, temp_f, wind_dir, wind_spd, rain_mm, rain_in;
-	char time_str[LOCAL_TIME_BUFLEN];
+	char time_str[LOCAL_TIME_BUFLEN], *wind_key, *wind_label;
+	data_t *data;
 
 	for (m = 0; m < BITBUF_ROWS; m++) {
 		// break out the message nybbles into separate bytes
@@ -102,7 +106,7 @@ static int lacrossews_callback(bitbuffer_t *bitbuffer) {
 
 			local_time_str(0, time_str);
 
-			if (debug_output) 
+			if (debug_output)
 				fprintf(stderr, "%1X%1X%1X%1X%1X%1X%1X%1X%1X%1X%1X%1X%1X   ",
 									msg_nybbles[0], msg_nybbles[1], msg_nybbles[2], msg_nybbles[3],
 									msg_nybbles[4], msg_nybbles[5], msg_nybbles[6], msg_nybbles[7],
@@ -113,27 +117,41 @@ static int lacrossews_callback(bitbuffer_t *bitbuffer) {
 			// Temperature
 			case 0:
 				temp_c = (msg_value_bcd - 300.0) / 10.0;
-				temp_f = temp_c * 1.8 + 32;
-				printf("%s LaCrosse WS %02X-%02X: Temperature %3.1f C / %3.1f F\n",
-					time_str, ws_id, sensor_id, temp_c, temp_f);
+				data = data_make("time",          "",             DATA_STRING, time_str,
+													"model",         "",            DATA_STRING, "LaCrosse WS",
+													"ws_id",         "",            DATA_INT, ws_id,
+													"id",            "",            DATA_INT, sensor_id,
+													"temperature_C", "Temperature", DATA_FORMAT, "%.1f C", DATA_DOUBLE, temp_c,
+													NULL);
+				data_acquired_handler(data);
 				events++;
+
 				break;
 			// Humidity
 			case 1:
 				if(msg_nybbles[7] == 0xA && msg_nybbles[8] == 0xA)
-					printf("%s LaCrosse WS %02X-%02X: Humidity Error\n",
+					fprintf(stderr, "%s LaCrosse WS %02X-%02X: Humidity Error\n",
 						time_str, ws_id, sensor_id);
-				else
-					printf("%s LaCrosse WS %02X-%02X: Humidity %2d %%\n",
-						time_str, ws_id, sensor_id, msg_value_bcd2);
+				else {
+					data = data_make("time",          "",            DATA_STRING, time_str,
+														"model",         "",            DATA_STRING, "LaCrosse WS",
+														"ws_id",         "",            DATA_INT, ws_id,
+														"id",            "",            DATA_INT, sensor_id,
+														"humidity",      "Humidity",    DATA_INT, msg_value_bcd2,
+								 						NULL);
+					data_acquired_handler(data);
 					events++;
+				}
 				break;
 			// Rain
 			case 2:
 				rain_mm = 0.5180 * msg_value_bin;
-				rain_in = 0.0204 * msg_value_bin;
-				printf("%s LaCrosse WS %02X-%02X: Rain %3.2f mm / %3.2f in\n",
-					time_str, ws_id, sensor_id, rain_mm, rain_in);
+				data = data_make("time",          "",           DATA_STRING, time_str,
+													"model",          "",           DATA_STRING, "LaCrosse WS",
+													"ws_id",          "",           DATA_INT, ws_id,
+													"id",             "",           DATA_INT, sensor_id,
+													"rainfall_mm",    "Rainfall",   DATA_FORMAT, "%3.2f mm", DATA_DOUBLE, rain_mm, NULL);
+				data_acquired_handler(data);
 				events++;
 				break;
 			// Wind
@@ -142,19 +160,30 @@ static int lacrossews_callback(bitbuffer_t *bitbuffer) {
 			case 7:
 				wind_dir = msg_nybbles[9] * 22.5;
 				wind_spd = (msg_nybbles[7] * 16 + msg_nybbles[8])/ 10.0;
-				if(msg_nybbles[7] == 0xF && msg_nybbles[8] == 0xE)
-					printf("%s LaCrosse WS %02X-%02X: %s Not Connected\n",
+				if(msg_nybbles[7] == 0xF && msg_nybbles[8] == 0xE) {
+                    if (debug_output) {
+					fprintf(stderr, "%s LaCrosse WS %02X-%02X: %s Not Connected\n",
 						time_str, ws_id, sensor_id, msg_type == 3 ? "Wind":"Gust");
-				else {
-					printf("%s LaCrosse WS %02X-%02X: %s Dir %3.1f  Speed %3.1f m/s / %3.1f mph\n",
-						time_str, ws_id, sensor_id, msg_type == 3 ? "Wind":"Gust", wind_dir, wind_spd, wind_spd * 2.236936292054);
+                    }
+                } else {
+					wind_key = msg_type == 3 ? "wind_speed_ms":"gust_speed_ms";
+					wind_label = msg_type == 3 ? "Wind speed":"Gust speed";
+					data = data_make("time",          "",           DATA_STRING, time_str,
+														"model",          "",           DATA_STRING, "LaCrosse WS",
+														"ws_id",          "",           DATA_INT, ws_id,
+														"id",             "",           DATA_INT, sensor_id,
+														wind_key,         wind_label,   DATA_FORMAT, "%3.1f m/s", DATA_DOUBLE, wind_spd,
+														"wind_direction", "Direction",  DATA_DOUBLE, wind_dir, NULL);
+					data_acquired_handler(data);
 					events++;
 				}
 				break;
 			default:
+                if (debug_output) {
 				fprintf(stderr,
 					"%s LaCrosse WS %02X-%02X: Unknown data type %d, bcd %d bin %d\n",
 					time_str, ws_id, sensor_id, msg_type, msg_value_bcd, msg_value_bin);
+                }
 				events++;
 			}
 		}
@@ -163,13 +192,28 @@ static int lacrossews_callback(bitbuffer_t *bitbuffer) {
 	return events;
 }
 
+static char *output_fields[] = {
+		"time",
+		"model",
+		"ws_id",
+		"id",
+		"temperature_C",
+		"humidity",
+		"rainfall_mm",
+		"wind_speed_ms",
+		"gust_speed_ms",
+		"wind_direction",
+		NULL
+};
+
 r_device lacrossews = {
  .name           = "LaCrosse WS-2310 Weather Station",
  .modulation     = OOK_PULSE_PWM_RAW,
  .short_limit    = 952,
  .long_limit     = 3000,
  .reset_limit    = 8000,
- .json_callback  = &lacrossews_callback, 
+ .json_callback  = &lacrossews_callback,
  .disabled       = 0,
  .demod_arg      = 0,
+ .fields = output_fields
 };
