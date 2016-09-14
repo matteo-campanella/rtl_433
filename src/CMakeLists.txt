@@ -40,6 +40,7 @@ add_executable(rtl_433
 	devices/emontx.c
 	devices/esperanza_ews.c
 	devices/fineoffset.c
+	devices/fineoffset_wh2a.c
 	devices/fineoffset_wh1080.c
 	devices/generic_remote.c
 	devices/generic_temperature_sensor.c

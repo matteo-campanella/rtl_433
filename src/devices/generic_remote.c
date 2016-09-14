@@ -13,11 +13,16 @@
  */
 #include "rtl_433.h"
 #include "pulse_demod.h"
+#include "data.h"
+#include "util.h"
 
 
 static int generic_remote_callback(bitbuffer_t *bitbuffer) {
 	bitrow_t *bb = bitbuffer->bb;
 	uint8_t *b = bb[0];
+	data_t *data;
+	char time_str[LOCAL_TIME_BUFLEN];
+
 	
 	//invert bits, short pulse is 0, long pulse is 1
 	b[0] = ~b[0];
@@ -36,9 +41,18 @@ static int generic_remote_callback(bitbuffer_t *bitbuffer) {
 		uint32_t ID_16b = b[0] << 8 | b[1];
 		unsigned char CMD_8b = b[2];
 
+        	local_time_str(0, time_str);
+
 		fprintf(stdout, "Generic remote keypress / sensor\n");
 		fprintf(stdout, "ID 16bit = 0x%04X\n", ID_16b);
 		fprintf(stdout, "CMD 8bit = 0x%02X\n", CMD_8b);
+
+	        data = data_make("time",          "",            DATA_STRING, time_str,
+                         "model",         "",            DATA_STRING, "Generic remote keypress / sensor",
+                         "id",            "",            DATA_INT, ID_16b,
+                         "cmd",	"", DATA_INT, CMD_8b,
+                          NULL);
+	        data_acquired_handler(data);
 
 
 		// output tristate coding
@@ -66,6 +80,14 @@ static int generic_remote_callback(bitbuffer_t *bitbuffer) {
 	return 0;
 }
 
+static char *output_fields[] = {
+    "time",
+    "model",
+    "id",
+    "cmd",
+    NULL
+};
+
 
 PWM_Precise_Parameters pwm_precise_parameters_generic = {
 	.pulse_tolerance	= 50,
@@ -81,4 +103,5 @@ r_device generic_remote = {
 	.json_callback	= &generic_remote_callback,
 	.disabled		= 0,
 	.demod_arg		= (unsigned long)&pwm_precise_parameters_generic,
+        .fields         = output_fields
 };

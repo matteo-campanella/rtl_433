@@ -22,6 +22,7 @@
 		DECL(alectov1) \
 		DECL(cardin) \
 		DECL(fineoffset_WH2) \
+		DECL(fineoffset_WH2A) \
 		DECL(nexus) \
 		DECL(ambient_weather) \
 		DECL(calibeur_RF104) \
