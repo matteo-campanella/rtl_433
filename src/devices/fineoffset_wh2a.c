@@ -48,7 +48,7 @@ static int fineoffset_WH2A_callback(bitbuffer_t *bitbuffer) {
 
     // Validate package
     if (bitbuffer->bits_per_row[0] >= 59 &&         // Don't waste time on a short packages
-        bb[0][0] == 0xFE		            // Preamble
+        bb[0][0] == 0xFE && bb[0][7] == 0x00
     //    bb[0][5] == crc8(&bb[0][1], 4, polynomial, 0)	// CRC (excluding preamble)
     )
     {
