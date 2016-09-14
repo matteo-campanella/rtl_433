@@ -15,10 +15,6 @@
 #include "pulse_demod.h"
 #include "data.h"
 #include "util.h"
-<<<<<<< HEAD
-
-=======
->>>>>>> 2a377b3f18ae2b1b1cfcf15a2ea50c91b3b4cbbf
 
 static int generic_remote_callback(bitbuffer_t *bitbuffer) {
 	bitrow_t *bb = bitbuffer->bb;
