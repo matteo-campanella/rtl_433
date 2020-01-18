@@ -5,9 +5,7 @@
  * Sensible Living uses a speed of 1000, i.e. 1000 us per bit.
  */
 
-#include "rtl_433.h"
-#include "pulse_demod.h"
-#include "util.h"
+#include "decoder.h"
 
 // Maximum message length (including the headers, byte count and FCS) we are willing to support
 // This is pretty arbitrary
@@ -18,7 +16,7 @@
 uint8_t rh_payload[RH_ASK_MAX_PAYLOAD_LEN] = {0};
 int rh_data_payload[RH_ASK_MAX_MESSAGE_LEN];
 
-// Note: all tje "4to6 code" came from RadioHead source code.
+// Note: all the "4to6 code" came from RadioHead source code.
 // see: http://www.airspayce.com/mikem/arduino/RadioHead/index.html
 
 // 4 bit to 6 bit symbol converter table
@@ -47,7 +45,7 @@ static uint8_t symbol_6to4(uint8_t symbol)
     return 0xFF; // Not found
 }
 
-static int radiohead_ask_extract(bitbuffer_t *bitbuffer, uint8_t row, /*OUT*/ uint8_t *payload)
+static int radiohead_ask_extract(r_device *decoder, bitbuffer_t *bitbuffer, uint8_t row, /*OUT*/ uint8_t *payload)
 {
     int len = bitbuffer->bits_per_row[row];
     int msg_len = RH_ASK_MAX_MESSAGE_LEN;
@@ -70,10 +68,10 @@ static int radiohead_ask_extract(bitbuffer_t *bitbuffer, uint8_t row, /*OUT*/ ui
 
     pos = bitbuffer_search(bitbuffer, row, 0, init_pattern, init_pattern_len);
     if (pos == len) {
-        if (debug_output) {
-            printf("RH ASK preamble not found\n");
+        if (decoder->verbose > 1) {
+            fprintf(stderr, "%s: preamble not found\n", __func__);
         }
-        return 0;
+        return DECODE_ABORT_EARLY;
     }
 
     // read "bytes" of 12 bit
@@ -88,17 +86,17 @@ static int radiohead_ask_extract(bitbuffer_t *bitbuffer, uint8_t row, /*OUT*/ ui
         rxBits[0] &= 0x3F;
         uint8_t hi_nibble = symbol_6to4(rxBits[0]);
         if (hi_nibble > 0xF) {
-            if (debug_output) {
-                fprintf(stdout, "Error on 6to4 decoding high nibble: %X\n", rxBits[0]);
+            if (decoder->verbose) {
+                fprintf(stderr, "%s: Error on 6to4 decoding high nibble: %X\n", __func__, rxBits[0]);
             }
-            return 0;
+            return DECODE_FAIL_SANITY;
         }
         uint8_t lo_nibble = symbol_6to4(rxBits[1]);
         if (lo_nibble > 0xF) {
-            if (debug_output) {
-                fprintf(stdout, "Error on 6to4 decoding low nibble: %X\n", rxBits[1]);
+            if (decoder->verbose) {
+                fprintf(stderr, "%s: Error on 6to4 decoding low nibble: %X\n", __func__, rxBits[1]);
             }
-            return 0;
+            return DECODE_FAIL_SANITY;
         }
         uint8_t byte = hi_nibble << 4 | lo_nibble;
         payload[nb_bytes] = byte;
@@ -108,27 +106,41 @@ static int radiohead_ask_extract(bitbuffer_t *bitbuffer, uint8_t row, /*OUT*/ ui
         nb_bytes++;
     }
 
+    // Prevent buffer underflow when calculating CRC
+    if (msg_len < 2) {
+        if (decoder->verbose > 1) {
+            fprintf(stderr, "%s: message too short to contain crc\n", __func__);
+        }
+        return DECODE_ABORT_LENGTH;
+    }
+    // Sanity check on excessive msg len
+    if (msg_len > RH_ASK_MAX_MESSAGE_LEN) {
+        if (decoder->verbose > 1) {
+            fprintf(stderr, "%s: message too long: %d\n", __func__, msg_len);
+        }
+        return DECODE_ABORT_LENGTH;
+    }
+
     // Check CRC
     crc = (payload[msg_len - 1] << 8) | payload[msg_len - 2];
-    crc_recompute = ~crc16(payload, msg_len - 2, 0x8408, 0xFFFF);
+    crc_recompute = ~crc16lsb(payload, msg_len - 2, 0x8408, 0xFFFF);
     if (crc_recompute != crc) {
-        if (debug_output) {
-            fprintf(stdout, "CRC error: %04X != %04X\n", crc_recompute, crc);
+        if (decoder->verbose) {
+            fprintf(stderr, "%s: CRC error: %04X != %04X\n", __func__, crc_recompute, crc);
         }
-        return 0;
+        return DECODE_FAIL_MIC;
     }
 
     return msg_len;
 }
 
-static int radiohead_ask_callback(bitbuffer_t *bitbuffer)
+static int radiohead_ask_callback(r_device *decoder, bitbuffer_t *bitbuffer)
 {
-    char time_str[LOCAL_TIME_BUFLEN];
     data_t *data;
     uint8_t row = 0; // we are considering only first row
     int msg_len, data_len, header_to, header_from, header_id, header_flags;
 
-    msg_len = radiohead_ask_extract(bitbuffer, row, rh_payload);
+    msg_len = radiohead_ask_extract(decoder, bitbuffer, row, rh_payload);
     if (msg_len <= 0) {
         return msg_len; // pass error code on
     }
@@ -143,10 +155,8 @@ static int radiohead_ask_callback(bitbuffer_t *bitbuffer)
     for (int j = 0; j < msg_len; j++) {
         rh_data_payload[j] = (int)rh_payload[5 + j];
     }
-    local_time_str(0, time_str);
     data = data_make(
-            "time",         "",             DATA_STRING, time_str,
-            "model",        "",             DATA_STRING, "RadioHead ASK",
+            "model",        "",             DATA_STRING, _X("RadioHead-ASK","RadioHead ASK"),
             "len",          "Data len",     DATA_INT, data_len,
             "to",           "To",           DATA_INT, header_to,
             "from",         "From",         DATA_INT, header_from,
@@ -155,20 +165,19 @@ static int radiohead_ask_callback(bitbuffer_t *bitbuffer)
             "payload",      "Payload",      DATA_ARRAY, data_array(data_len, DATA_INT, rh_data_payload),
             "mic",          "Integrity",    DATA_STRING, "CRC",
             NULL);
-    data_acquired_handler(data);
+    decoder_output_data(decoder, data);
 
     return 1;
 }
 
-static int sensible_living_callback(bitbuffer_t *bitbuffer)
+static int sensible_living_callback(r_device *decoder, bitbuffer_t *bitbuffer)
 {
-    char time_str[LOCAL_TIME_BUFLEN];
     data_t *data;
     uint8_t row = 0; // we are considering only first row
     int msg_len, house_id, sensor_type, sensor_count, alarms;
     int module_id, sensor_value, battery_voltage;
 
-    msg_len = radiohead_ask_extract(bitbuffer, row, rh_payload);
+    msg_len = radiohead_ask_extract(decoder, bitbuffer, row, rh_payload);
     if (msg_len <= 0) {
         return msg_len; // pass error code on
     }
@@ -181,26 +190,23 @@ static int sensible_living_callback(bitbuffer_t *bitbuffer)
     sensor_value = (rh_payload[7] << 8) | rh_payload[8];
     battery_voltage = (rh_payload[9] << 8) | rh_payload[10];
 
-    local_time_str(0, time_str);
     data = data_make(
-             "time",             "",                 DATA_STRING,  time_str,
-             "model",            "",                 DATA_STRING,  "Sensible Living Plant Moisture",
-             "house_id",         "House ID",         DATA_INT,     house_id,
-             "module_id",        "Module ID",        DATA_INT,     module_id,
-             "sensor_type",      "Sensor Type",      DATA_INT,     sensor_type,
-             "sensor_count",     "Sensor Count",     DATA_INT,     sensor_count,
-             "alarms",           "Alarms",           DATA_INT,     alarms,
-             "sensor_value",     "Sensor Value",     DATA_INT,     sensor_value,
-             "battery_voltage",  "Battery Voltage",  DATA_INT,     battery_voltage,
-             "mic",              "Integrity",        DATA_STRING,  "CRC",
-             NULL);
-    data_acquired_handler(data);
+            "model",            "",                 DATA_STRING,  _X("SensibleLiving-Moisture","Sensible Living Plant Moisture"),
+            "house_id",         "House ID",         DATA_INT,     house_id,
+            "module_id",        "Module ID",        DATA_INT,     module_id,
+            "sensor_type",      "Sensor Type",      DATA_INT,     sensor_type,
+            "sensor_count",     "Sensor Count",     DATA_INT,     sensor_count,
+            "alarms",           "Alarms",           DATA_INT,     alarms,
+            "sensor_value",     "Sensor Value",     DATA_INT,     sensor_value,
+            _X("battery_mV","battery_voltage"),       "Battery Voltage",  DATA_INT,     _X(battery_voltage * 10, battery_voltage),
+            "mic",              "Integrity",        DATA_STRING,  "CRC",
+            NULL);
+    decoder_output_data(decoder, data);
 
     return 1;
 }
 
 static char *radiohead_ask_output_fields[] = {
-    "time",
     "model",
     "len",
     "to",
@@ -213,7 +219,6 @@ static char *radiohead_ask_output_fields[] = {
 };
 
 static char *sensible_living_output_fields[] = {
-    "time",
     "model",
     "house_id",
     "module_id",
@@ -221,7 +226,8 @@ static char *sensible_living_output_fields[] = {
     "sensor_count",
     "alarms",
     "sensor_value",
-    "battery_voltage",
+    "battery_voltage", // TODO: remove this
+    "battery_mV",
     "mic",
     NULL
 };
@@ -229,19 +235,19 @@ static char *sensible_living_output_fields[] = {
 r_device radiohead_ask = {
     .name           = "Radiohead ASK",
     .modulation     = OOK_PULSE_PCM_RZ,
-    .short_limit    = 500,
-    .long_limit     = 500,
+    .short_width    = 500,
+    .long_width     = 500,
     .reset_limit    = 5*500,
-    .json_callback  = &radiohead_ask_callback,
+    .decode_fn      = &radiohead_ask_callback,
     .fields         = radiohead_ask_output_fields,
 };
 
 r_device sensible_living = {
     .name           = "Sensible Living Mini-Plant Moisture Sensor",
     .modulation     = OOK_PULSE_PCM_RZ,
-    .short_limit    = 1000,
-    .long_limit     = 1000,
+    .short_width    = 1000,
+    .long_width     = 1000,
     .reset_limit    = 5*1000,
-    .json_callback  = &sensible_living_callback,
+    .decode_fn      = &sensible_living_callback,
     .fields         = sensible_living_output_fields,
 };
