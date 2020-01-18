@@ -35,6 +35,7 @@ rtl_433_SOURCES      = baseband.c \
                        devices/emontx.c \
                        devices/esperanza_ews.c \
                        devices/fineoffset.c \
+                       devices/fineoffset_wh2a.c \
                        devices/fineoffset_wh1050.c \
                        devices/fineoffset_wh1080.c \
                        devices/flex.c \
