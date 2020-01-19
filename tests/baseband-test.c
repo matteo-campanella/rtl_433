@@ -15,7 +15,23 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <sys/types.h>
+#ifdef _MSC_VER
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
+
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+#ifdef _MSC_VER
+#define F_OK 0
+#define R_OK (1 << 2)
+#endif
+#endif
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
+
 #include <time.h>
 
 #include "baseband.h"
@@ -69,8 +85,8 @@ int main(int argc, char *argv[])
     long n_read;
     unsigned long n_samples;
     int max_block_size = 4096000;
-    FilterState state;
-    DemodFM_State fm_state;
+    filter_state_t state;
+    demodfm_state_t fm_state;
 
     if (argc <= 1) {
         return 1;
@@ -117,7 +133,7 @@ int main(int argc, char *argv[])
     );
     write_buf("bb.lp.am.s16", u16_buf, sizeof(int16_t) * n_samples);
     MEASURE("baseband_demod_FM",
-        baseband_demod_FM(cu8_buf, s16_buf, n_samples, &fm_state);
+        baseband_demod_FM(cu8_buf, s16_buf, n_samples, &fm_state, 0);
     );
     write_buf("bb.fm.s16", s16_buf, sizeof(int16_t) * n_samples);
 
@@ -143,7 +159,16 @@ int main(int argc, char *argv[])
     //write_buf("bb.fm.s32", s32_buf, sizeof(int32_t) * n_samples);
 
     MEASURE("baseband_demod_FM_cs16",
-        baseband_demod_FM_cs16(cs16_buf, s16_buf, n_samples, &fm_state);
+        baseband_demod_FM_cs16(cs16_buf, s16_buf, n_samples, &fm_state, 0);
     );
     write_buf("bb.cs16.fm.s16", s16_buf, sizeof(int16_t) * n_samples);
+
+    free(cu8_buf);
+    free(y16_buf);
+    free(cs16_buf);
+    free(y32_buf);
+    free(u16_buf);
+    free(u32_buf);
+    free(s16_buf);
+    free(s32_buf);
 }

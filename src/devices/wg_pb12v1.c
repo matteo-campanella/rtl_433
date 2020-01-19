@@ -1,118 +1,109 @@
-/* WG-PB12V1 Temperature Sensor
- * ---
- * Device method to decode a generic wireless temperature probe. Probe marked
- * with WG-PB12V1-2016/11.
- *
- * Format of Packets
- * ---
- * The packet format appears to be similar those the Lacrosse format.
- * (http://fredboboss.free.fr/articles/tx29.php)
- *
- * AAAAAAAA ????TTTT TTTTTTTT ???IIIII HHHHHHHH CCCCCCCC
- *
- * A = Preamble - 11111111
- * ? = Unknown - possibly battery charge
- * T = Temperature - see below
- * I = ID of probe is set randomly each time the device is powered off-on,
- *     Note, base station has and unused "123" symbol, but ID values can be
- *     higher than this.
- * H = Humidity - not used, is always 11111111
- * C = Checksum - CRC8, polynomial 0x31, initial value 0x0, final value 0x0
- *
- * Temperature
- * ---
- * Temperature value is "milli-celsius", ie 1000 mC = 1C, offset by -40 C.
- *
- * 0010 01011101 = 605 mC => 60.5 C
- * Remove offset => 60.5 C - 40 C = 20.5 C
- *
- * Unknown
- * ---
- * Possible uses could be weak battery, or new battery.
- *
- * At the moment it this device cannot distinguish between a Fine Offset
- * device, see fineoffset.c.
- *
- * Copyright (C) 2015 Tommy Vestermark
- * Modifications Copyright (C) 2017 Ciarán Mooney
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- */
+/** @file
+    WG-PB12V1 Temperature Sensor.
 
-#include "rtl_433.h"
-#include "data.h"
-#include "util.h"
+    Copyright (C) 2015 Tommy Vestermark
+    Modifications Copyright (C) 2017 Ciarán Mooney
 
-static int wg_pb12v1_callback(bitbuffer_t *bitbuffer) {
-    /* This function detects if the packet (bitbuffer) is from a WG-PB12V1
-     * sensor, and decodes it if it passes the checks.
-     */
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+*/
+/**
+WG-PB12V1 Temperature Sensor.
 
-    bitrow_t *bb = bitbuffer->bb;
+Device method to decode a generic wireless temperature probe. Probe marked
+with WG-PB12V1-2016/11.
+
+Format of Packets:
+
+The packet format appears to be similar those the Lacrosse format.
+(http://fredboboss.free.fr/articles/tx29.php)
+
+    AAAAAAAA MMMMTTTT TTTTTTTT ???IIIII HHHHHHHH CCCCCCCC
+
+- A: Preamble - 11111111
+- M: Message type?, fixed 0x3, e.g. Fine Offset WH2 has 0x4 here
+- T: Temperature, scale 10, offset 40
+- I: ID of probe is set randomly each time the device is powered off-on,
+     Note, base station has and unused "123" symbol, but ID values can be
+     higher than this.
+- H: Humidity - not used, is always 11111111
+- C: Checksum - CRC8, polynomial 0x31, initial value 0x0, final value 0x0
+
+Temperature:
+
+Temperature value is "deci-celsius", ie 10 dC = 1C, offset by -40 C.
+
+    0010 01011101 = 605 dC => 60.5 C
+    Remove offset => 60.5 C - 40 C = 20.5 C
+
+Unknown:
+
+Possible uses could be weak battery, or new battery.
+
+At the moment it this device cannot distinguish between a Fine Offset
+device, see fineoffset.c.
+*/
+
+#include "decoder.h"
+
+static int wg_pb12v1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
+{
     data_t *data;
-
-    char time_str[LOCAL_TIME_BUFLEN];
-
-    uint8_t id;
-    int16_t temp;
-    float temperature;
-
-    const uint8_t polynomial = 0x31;    // x8 + x5 + x4 + 1 (x8 is implicit)
+    uint8_t *b;
+    int id;
+    int temp_raw;
+    float temp_c;
 
     // Validate package
-    if (bitbuffer->bits_per_row[0] >= 48 &&              // Don't waste time on a short packages
-        bb[0][0] == 0xFF &&                              // Preamble
-        bb[0][5] == crc8(&bb[0][1], 4, polynomial, 0) && // CRC (excluding preamble)
-        bb[0][4] == 0xFF                                 // Humidity set to 11111111
-        ){
+    b = bitbuffer->bb[0];
+    if (bitbuffer->bits_per_row[0] < 48)
+        return DECODE_ABORT_LENGTH;
+    if (b[0] != 0xFF) // Preamble
+        return DECODE_ABORT_EARLY;
+    if ((b[1] & 0xf0) != 0x30) // Message type, TODO: is this always a fixed value?
+        return DECODE_ABORT_EARLY;
+    if (b[5] != crc8(&b[1], 4, 0x31, 0)) // CRC (excluding preamble)
+        return DECODE_FAIL_MIC;
+    if (b[4] != 0xFF) // Humidity set to 11111111
+        return DECODE_FAIL_OTHER;
 
-        /* Get time now */
-        local_time_str(0, time_str);
+    // Nibble 7,8 contains id
+    id = b[3] & 0x1F;
 
-         // Nibble 7,8 contains id
-        id = ((bb[0][3]&0x1F));
+    // Nibble 5,6,7 contains 12 bits of temperature
+    // Temperature, scaled by 10, offset by -40 C.
+    temp_raw = ((b[1] & 0x0F) << 8) | b[2];
+    temp_c = ((float)temp_raw * 0.1) - 40;
 
-        // Nibble 5,6,7 contains 12 bits of temperature
-        // The temperature is "milli-celsius", ie 1000 mC = 1C, offset by -40 C.
-        temp = ((bb[0][1] & 0x0F) << 8) | bb[0][2];
-        temperature = ((float)temp / 10)-40;
-
-        data = data_make("time",          "",            DATA_STRING, time_str,
-                         "model",         "",            DATA_STRING, "WG-PB12V1",
-                         "id",            "ID",          DATA_INT, id,
-                         "temperature_C", "Temperature", DATA_FORMAT, "%.01f C", DATA_DOUBLE, temperature,
-                         "mic",           "Integrity",   DATA_STRING, "CRC",
-                          NULL);
-        data_acquired_handler(data);
-        return 1;
-    }
-    return 0;
+    /* clang-format off */
+    data = data_make(
+            "model",            "",             DATA_STRING, "WG-PB12V1",
+            "id",               "ID",           DATA_INT,    id,
+            "temperature_C",    "Temperature",  DATA_FORMAT, "%.01f C", DATA_DOUBLE, temp_c,
+            "mic",              "Integrity",    DATA_STRING, "CRC",
+            NULL);
+    /* clang-format on */
+    decoder_output_data(decoder, data);
+    return 1;
 }
 
 static char *output_fields[] = {
-    /* Defines the output files for this device function.
-     */
-    "time",
-    "model",
-    "id",
-    "temperature_C",
-    "mic",
-    NULL
+        "model",
+        "id",
+        "temperature_C",
+        "mic",
+        NULL,
 };
 
 r_device wg_pb12v1 = {
-    /* Defines object information for use in other parts of RTL_433.
-     */
-     .name           = "WG-PB12V1",
-    .modulation     = OOK_PULSE_PWM_RAW,
-    .short_limit    = 650,	// Short pulse 564µs, long pulse 1476µs, fixed gap 960µs
-    .long_limit     = 1550,	// Maximum pulse period (long pulse + fixed gap)
-    .reset_limit    = 2500,	// We just want 1 package
-    .json_callback  = &wg_pb12v1_callback,
-    .disabled       = 0,
-    .demod_arg      = 0,
-    .fields         = output_fields
+        .name        = "WG-PB12V1 Temperature Sensor",
+        .modulation  = OOK_PULSE_PWM,
+        .short_width = 564,  // Short pulse 564µs, long pulse 1476µs, fixed gap 960µs
+        .long_width  = 1476, // Maximum pulse period (long pulse + fixed gap)
+        .reset_limit = 2500, // We just want 1 package
+        .decode_fn   = &wg_pb12v1_decode,
+        .disabled    = 0,
+        .fields      = output_fields,
 };
